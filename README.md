@@ -31,14 +31,161 @@ health_tool/
       xiaomi.py             # 小米导出的尽力而为适配层
 ```
 
-## 快速开始
+## 运行方式
+
+项目使用 Docker Compose 同时启动 PostgreSQL 和 Streamlit，不需要在本机单独安装 Python 或 PostgreSQL。
+
+### 1. 准备运行环境
+
+请先安装并启动 Docker：
+
+- macOS / Windows：安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/)。
+- Linux：安装 Docker Engine 和 Docker Compose 插件。
+
+确认 Docker 可用：
 
 ```bash
-cp .env.example .env   # 按需修改密码
+docker --version
+docker compose version
+```
+
+### 2. 进入项目目录
+
+如果还没有下载项目，先执行：
+
+```bash
+git clone https://github.com/jackplus/health_tool.git
+cd health_tool
+```
+
+如果已经下载，直接在终端进入包含 `docker-compose.yml` 的项目根目录。
+
+### 3. 创建环境变量文件
+
+```bash
+cp .env.example .env
+```
+
+打开 `.env`，至少把默认数据库密码 `change_me` 改成一个强密码：
+
+```dotenv
+POSTGRES_USER=health
+POSTGRES_PASSWORD=请替换为强密码
+POSTGRES_DB=health
+POSTGRES_HOST=db
+POSTGRES_PORT=5432
+```
+
+`.env` 已被 `.gitignore` 忽略，不要将真实密码提交到 Git。
+
+### 4. 构建并启动服务
+
+```bash
 docker compose up -d --build
 ```
 
-浏览器打开 `http://<你的服务器>:8501`，先去 **Upload** 页面上传一份 Apple Health `export.zip`。
+首次启动会下载镜像、安装 Python 依赖并初始化数据库，所需时间取决于网络速度。
+
+查看服务状态：
+
+```bash
+docker compose ps
+```
+
+正常情况下，`db` 应显示为 `healthy`，`app` 应显示为运行中。如果启动失败，查看日志：
+
+```bash
+docker compose logs -f app
+docker compose logs -f db
+```
+
+按 `Ctrl+C` 可退出日志查看，不会停止服务。
+
+### 5. 打开看板
+
+本机运行时，在浏览器打开：
+
+```text
+http://localhost:8501
+```
+
+如果 Docker 运行在另一台服务器上，将 `localhost` 替换为服务器 IP 或域名。健康数据属于敏感信息，请不要将 8501 端口直接暴露到公网；远程部署时应使用 HTTPS 和身份认证。
+
+## 上传健康数据
+
+### Apple Health
+
+1. 在 iPhone 上打开「健康」App。
+2. 点击右上角头像。
+3. 选择「导出所有健康数据」，确认导出。
+4. 等待系统生成 `export.zip`，再通过 AirDrop、iCloud Drive 或其他安全方式传到电脑。
+5. 在看板左侧导航中打开 **Upload**。
+6. 选择 **Apple Health** 标签页，点击上传区域并选择原始 `export.zip`。不要先解压。
+7. 点击「解析并导入」，等待页面显示解析数量和新写入数量。导出文件较大时可能需要几分钟。
+
+导入完成后，可以在 **Overview**、**Trends** 和 **Workouts** 页面查看数据。重复上传同一份 Apple Health 全量导出时，已存在的记录会被跳过。
+
+### 小米运动健康
+
+1. 在小米运动健康 App 中申请导出个人数据。具体入口可能会随 App 版本和地区变化。
+2. 导出完成后，将获得的 `.csv`、`.json` 或包含这些文件的 `.zip` 传到电脑。
+3. 在看板左侧导航中打开 **Upload**。
+4. 选择 **小米运动健康** 标签页，选择文件后点击「解析并导入」。
+5. 检查页面显示的指标类型、解析数量和未识别说明，再到 **Overview** 或 **Trends** 页面核对数值。
+
+小米没有公开文档化的个人数据导出格式，因此当前解析器会根据常见文件名和列名尽力识别。首次导入后请务必与 App 中的原始数值进行抽样核对。
+
+### 查看上传结果
+
+**Upload** 页面底部的「上传历史」会显示：
+
+- 数据来源和文件名；
+- 上传时间与处理状态；
+- 解析记录数和实际新写入数；
+- 重复数据或无法识别内容的说明。
+
+上传的原始文件会保存在项目的 `data/uploads/` 目录中。请注意该目录包含敏感个人数据，需做好访问权限和备份保护。
+
+## 停止、重启和更新
+
+停止并删除当前容器（保留数据库卷和上传文件）：
+
+```bash
+docker compose down
+```
+
+重启服务：
+
+```bash
+docker compose restart
+```
+
+获取新代码并重新构建：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+不要随意执行 `docker compose down -v`：`-v` 会删除 PostgreSQL 数据卷，已导入的数据将丢失。
+
+## 常见问题
+
+### 打不开 `http://localhost:8501`
+
+1. 运行 `docker compose ps` 确认 `app` 正在运行。
+2. 运行 `docker compose logs app` 查看错误。
+3. 确认 8501 端口没有被其他程序占用。
+
+### 数据库启动失败
+
+运行 `docker compose logs db` 检查密码、磁盘空间和数据库初始化日志。如果数据库已经初始化，之后只修改 `.env` 中的用户名或密码不会自动修改现有 PostgreSQL 账号。
+
+### Apple Health 文件上传或解析失败
+
+- 确认上传的是「健康」App 直接生成的 `export.zip`，而不是解压后的 `export.xml`。
+- 大文件需要更长时间和更多内存，处理期间不要重复点击导入按钮。
+- 同时运行 `docker compose logs -f app` 可查看服务端错误。
 
 ## 已知限制 / 后续工作
 
