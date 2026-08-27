@@ -1,11 +1,12 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 
 import db
-from config import DEFAULT_SOURCE_PRIORITY
+from config import APP_TIMEZONE, DEFAULT_SOURCE_PRIORITY
 
-SOURCES = ("apple_health", "xiaomi")
+SOURCES = ("health_auto_export", "apple_health", "xiaomi")
 SLEEP_STAGES = ("asleep", "core", "deep", "rem")
 
 
@@ -21,9 +22,16 @@ def now_utc() -> datetime:
 
 
 def today_range() -> tuple[datetime, datetime]:
-    now = now_utc()
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    return start, start + timedelta(days=1)
+    local_now = datetime.now(ZoneInfo(APP_TIMEZONE))
+    local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_start.astimezone(timezone.utc), (local_start + timedelta(days=1)).astimezone(timezone.utc)
+
+
+def local_dates_to_utc(start: date, end: date) -> tuple[datetime, datetime]:
+    zone = ZoneInfo(APP_TIMEZONE)
+    local_start = datetime.combine(start, datetime.min.time(), tzinfo=zone)
+    local_end = datetime.combine(end + timedelta(days=1), datetime.min.time(), tzinfo=zone)
+    return local_start.astimezone(timezone.utc), local_end.astimezone(timezone.utc)
 
 
 def last_n_days_range(n: int) -> tuple[datetime, datetime]:
@@ -106,8 +114,8 @@ def workouts_df(start: datetime, end: datetime, source_filter: str = "all"):
 def upload_history_df(limit: int = 50):
     return db.fetch_df(
         """
-        SELECT source, filename, uploaded_at, status, records_parsed,
-               records_inserted, notes
+        SELECT source, transport, filename, uploaded_at, status, records_parsed,
+               records_inserted, records_duplicate, records_ignored, notes
         FROM raw_uploads ORDER BY uploaded_at DESC LIMIT %s
         """,
         (limit,),
@@ -139,3 +147,39 @@ def latest_value(
 def available_sources() -> list[str]:
     df = db.fetch_df("SELECT DISTINCT source FROM health_metrics")
     return sorted(df["source"].tolist()) if not df.empty else []
+
+
+@st.cache_data(ttl=60)
+def insight_reports_df(report_type: str, limit: int = 12):
+    return db.fetch_df(
+        """
+        SELECT period_start, period_end, generated_at, status, summary,
+               data_coverage, comparisons, findings, recommendations
+        FROM insight_reports
+        WHERE report_type = %s
+        ORDER BY period_end DESC LIMIT %s
+        """,
+        (report_type, limit),
+    )
+
+
+def update_profile(goals: list[str], constraints: list[str]) -> None:
+    with db.get_conn() as conn:
+        with conn.cursor() as cur:
+            import psycopg2.extras
+
+            cur.execute(
+                """
+                UPDATE health_profile
+                SET goals = %s, constraints = %s, updated_at = now()
+                WHERE id = 1
+                """,
+                (psycopg2.extras.Json(goals), psycopg2.extras.Json(constraints)),
+            )
+
+
+def profile() -> dict:
+    rows = db.fetch_rows(
+        "SELECT timezone, goals, constraints, updated_at FROM health_profile WHERE id = 1"
+    )
+    return rows[0] if rows else {"timezone": APP_TIMEZONE, "goals": [], "constraints": []}

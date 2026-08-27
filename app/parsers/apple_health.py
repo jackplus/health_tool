@@ -22,9 +22,11 @@ QUANTITY_TYPE_MAP = {
     "HKQuantityTypeIdentifierDistanceWalkingRunning": "distance",
     "HKQuantityTypeIdentifierHeartRate": "heart_rate",
     "HKQuantityTypeIdentifierRestingHeartRate": "resting_heart_rate",
+    "HKQuantityTypeIdentifierHeartRateVariabilitySDNN": "hrv",
     "HKQuantityTypeIdentifierWalkingHeartRateAverage": "walking_heart_rate",
     "HKQuantityTypeIdentifierActiveEnergyBurned": "active_energy",
     "HKQuantityTypeIdentifierBodyMass": "weight",
+    "HKQuantityTypeIdentifierVO2Max": "vo2_max",
 }
 CATEGORY_TYPE_MAP = {
     "HKCategoryTypeIdentifierSleepAnalysis": "sleep_stage",

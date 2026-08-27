@@ -1,0 +1,16 @@
+[mcp_servers.private_health]
+command = "docker"
+args = ["compose", "run", "--rm", "-T", "-q", "mcp"]
+cwd = "."
+enabled = true
+required = false
+enabled_tools = [
+  "get_health_overview",
+  "get_metric_trend",
+  "get_recent_workouts",
+  "get_recovery_context",
+  "get_data_quality",
+  "get_generated_report",
+  "get_profile_and_goals",
+]
+default_tools_approval_mode = "auto"

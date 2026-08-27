@@ -29,6 +29,7 @@ class NormalizedWorkout:
     distance_unit: str | None = None
     energy_burned: float | None = None
     energy_unit: str | None = None
+    external_id: str = ""
     raw: dict = field(default_factory=dict)
 
 

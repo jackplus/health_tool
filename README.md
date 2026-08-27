@@ -1,21 +1,25 @@
 # 个人运动健康数据中心
 
-自托管的个人运动健康数据 BI 看板：整合 Apple Health 与小米运动健康的数据，用 Streamlit 呈现趋势和关键指标。
+自托管的个人运动健康数据中心：通过 Health Auto Export 定期接收 Apple Health 数据，生成基于个人基线的每日/每周建议，并通过只读 MCP 工具向 Codex 等 AI Agent 提供受控分析能力。保留 Apple Health 全量 ZIP 与小米运动健康文件的手动导入作为历史回填渠道。
 
-## 为什么是手动上传
+## 数据流
 
-Apple Health（HealthKit）和小米运动健康都**没有面向个人开发者的官方云端拉取 API**。因此本项目不做定时轮询，而是：
+Apple Health 没有供自托管服务直接拉取个人 HealthKit 数据的云端 API。本项目采用推送方式：
 
-1. 你定期在手机 App 里手动导出数据（Apple「健康」App 导出 `export.zip`；小米运动健康 App 申请个人数据导出得到 CSV/JSON）。
-2. 在本系统的 **Upload** 页面上传这些文件。
-3. 系统解析、去重、写入数据库，看板自动更新。
+1. iPhone 上的 Health Auto Export 定期把选定指标和运动记录发送到私有 API。
+2. API 校验密钥、标准化数据并幂等写入 PostgreSQL。
+3. 独立 scheduler 每天和每周生成可解释的个人基线报告。
+4. Streamlit 展示数据与建议；Codex 通过只读 MCP 工具查询聚合结果。
 
-重复上传同一份 Apple 全量导出是安全的——已存在的记录会被自动跳过（基于唯一约束的幂等写入），不会产生重复数据。
+重复推送或重复上传是安全的。API 按负载哈希审计请求，指标与运动记录另有数据库唯一约束。
 
 ## 架构
 
-- `db`：PostgreSQL，存储归一化后的健康指标（`health_metrics`）、运动记录（`workouts`）和上传审计记录（`raw_uploads`）。
-- `app`：Python 3.12 + Streamlit，既是看板也是上传入口（`st.file_uploader`）。
+- `db`：PostgreSQL，存储指标、运动、摄取审计、规则报告、个人目标和 MCP 审计。
+- `api`：FastAPI，接收 Health Auto Export JSON。
+- `scheduler`：APScheduler，按 Asia/Shanghai 时区生成每日及每周报告。
+- `app`：Streamlit 看板与手动回填入口。
+- `mcp`：只读 MCP Server，为 Codex 提供有界聚合查询。
 
 ```
 health_tool/
@@ -28,7 +32,9 @@ health_tool/
     config.py / db.py / queries.py / ingestion.py / style.py
     parsers/
       apple_health.py       # export.xml 流式解析
+      health_auto_export.py # Health Auto Export JSON 标准化
       xiaomi.py             # 小米导出的尽力而为适配层
+    api.py / worker.py / analysis.py / mcp_server.py
 ```
 
 ## 运行方式
@@ -66,7 +72,7 @@ cd health_tool
 cp .env.example .env
 ```
 
-打开 `.env`，至少把默认数据库密码 `change_me` 改成一个强密码：
+打开 `.env`，至少修改数据库密码并生成一个长随机 API 密钥：
 
 ```dotenv
 POSTGRES_USER=health
@@ -74,6 +80,8 @@ POSTGRES_PASSWORD=请替换为强密码
 POSTGRES_DB=health
 POSTGRES_HOST=db
 POSTGRES_PORT=5432
+APP_TIMEZONE=Asia/Shanghai
+HEALTH_API_KEY=请替换为长随机字符串
 ```
 
 `.env` 已被 `.gitignore` 忽略，不要将真实密码提交到 Git。
@@ -92,11 +100,13 @@ docker compose up -d --build
 docker compose ps
 ```
 
-正常情况下，`db` 应显示为 `healthy`，`app` 应显示为运行中。如果启动失败，查看日志：
+正常情况下，`db` 和 `api` 应显示为 `healthy`，`app` 与 `scheduler` 应显示为运行中。如果启动失败，查看日志：
 
 ```bash
 docker compose logs -f app
 docker compose logs -f db
+docker compose logs -f api
+docker compose logs -f scheduler
 ```
 
 按 `Ctrl+C` 可退出日志查看，不会停止服务。
@@ -111,7 +121,19 @@ http://localhost:8501
 
 如果 Docker 运行在另一台服务器上，将 `localhost` 替换为服务器 IP 或域名。健康数据属于敏感信息，请不要将 8501 端口直接暴露到公网；远程部署时应使用 HTTPS 和身份认证。
 
-## 上传健康数据
+## 配置 iPhone 自动同步
+
+在 Health Auto Export 中创建两条 REST API 自动化：
+
+1. URL：`http://家中服务器IP:3001/api/v1/health-auto-export`。
+2. 请求头：`api-key`，值与 `.env` 的 `HEALTH_API_KEY` 完全相同。
+3. 健康指标自动化选择睡眠、步数、活动能量、静息心率、HRV、体重；有数据时选择 VO₂max。格式使用 JSON，按天聚合并启用批量请求。
+4. 运动自动化选择 Workouts，保留单次运动详情；服务端不会向 Agent 暴露 GPS 路线。
+5. 先用 Manual Export 发送一段历史范围，再启用每日自动化。
+
+服务器必须在 iPhone 发送时在线。当前配置只应在可信家庭局域网内使用，不要把 3001 端口直接暴露到公网。
+
+## 手动历史回填
 
 ### Apple Health
 
@@ -169,6 +191,24 @@ docker compose up -d --build
 
 不要随意执行 `docker compose down -v`：`-v` 会删除 PostgreSQL 数据卷，已导入的数据将丢失。
 
+## Codex / AI Agent 接入
+
+仓库包含 `.codex/config.toml` 和 `.agents/skills/analyze-personal-health/SKILL.md`。在仓库根目录启动 Codex 后，项目级 MCP 配置会通过以下命令启动只读服务：
+
+```bash
+docker compose run --rm -T -q mcp
+```
+
+可用工具仅包含健康概览、单指标趋势、无路线运动摘要、恢复上下文、数据质量、已生成报告和用户主动填写的目标。工具不提供任意 SQL、原始上传、GPS、ECG、生殖健康或病历访问。
+
+示例提问：
+
+- “分析我过去七天的恢复情况，先说明数据覆盖率。”
+- “为什么这周静息心率比个人基线高？”
+- “结合最近一个月的睡眠和运动，下周如何安排活动？”
+
+MCP 在本地运行不等于模型推理一定在本地完成；聚合结果可能进入所用模型的上下文。因此默认只提供必要的汇总数据。如果未来需要跨机器 MCP，应使用 HTTPS/Tailscale 和独立 Bearer Token，不应暴露无认证 HTTP 服务。
+
 ## 常见问题
 
 ### 打不开 `http://localhost:8501`
@@ -191,7 +231,9 @@ docker compose up -d --build
 
 - **小米运动健康解析器是"尽力而为"实现**：小米没有公开文档化的个人数据导出格式，`app/parsers/xiaomi.py` 用宽松的列名匹配来适配常见的 CSV/JSON 字段（date/time/timestamp、steps、heart_rate、weight 等）。如果你的导出文件解析不理想，把文件样本发给维护者，只需要调整对应的 `_parse_*` 函数，不需要改动整体结构。
 - **睡眠阶段**：Apple 导出能区分 core/deep/rem/awake 等阶段；小米数据格式未知，目前统一按 `asleep` 处理，拿到真实样本后可以精化。
-- **v1 没有自动定时任务**：看板直接查询原始数据（有索引，个人数据量级下足够快）。如果以后数据量变大导致变慢，可以在 Settings 页面手动触发 `daily_rollups` 汇总重算，或者启用 `app/scheduler.py` 里预留的 APScheduler 夜间自动重算（默认未开启）。
+- 建议只基于个人 28 天基线；某指标至少有 14 个有效日后才参与趋势判断。
+- 第一版不发送邮件、短信或第三方推送，也不让 Agent 修改健康数据或自动执行训练计划。
+- 规则和 Agent 输出均为一般信息，不用于疾病诊断、治疗或替代专业医疗建议。
 
 ## 验证过的行为（本地用合成数据测试）
 

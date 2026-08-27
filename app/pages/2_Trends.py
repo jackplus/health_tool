@@ -18,9 +18,11 @@ METRIC_OPTIONS = {
     "steps": {"label": "步数", "agg": "sum", "chart": "bar"},
     "heart_rate": {"label": "心率（平均）", "agg": "avg", "chart": "line"},
     "resting_heart_rate": {"label": "静息心率", "agg": "avg", "chart": "line"},
+    "hrv": {"label": "心率变异性 HRV (ms)", "agg": "avg", "chart": "line"},
     "active_energy": {"label": "活动能量 (kcal)", "agg": "sum", "chart": "bar"},
     "distance": {"label": "步行+跑步距离", "agg": "sum", "chart": "bar"},
     "weight": {"label": "体重 (kg)", "agg": "avg", "chart": "line"},
+    "vo2_max": {"label": "VO₂max", "agg": "avg", "chart": "line"},
     "sleep_stage": {
         "label": "睡眠时长",
         "agg": "sum",
@@ -51,8 +53,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 else:
     start_date, end_date = today - timedelta(days=90), today
 
-start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
-end_dt = datetime.combine(end_date, datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)
+start_dt, end_dt = q.local_dates_to_utc(start_date, end_date)
 
 spec = METRIC_OPTIONS[metric_type]
 df = q.trend_df(metric_type, start_dt, end_dt, source_filter, spec.get("sub_keys"))

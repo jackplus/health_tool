@@ -4,10 +4,12 @@ same identity across every chart in the app -- color follows the source, not
 its rank or position."""
 
 SOURCE_COLORS = {
+    "health_auto_export": "#2f8f6b",
     "apple_health": "#2a78d6",
     "xiaomi": "#eb6834",
 }
 SOURCE_LABELS = {
+    "health_auto_export": "Apple Health 自动同步",
     "apple_health": "Apple Health",
     "xiaomi": "小米运动健康",
 }

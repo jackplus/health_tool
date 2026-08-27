@@ -26,8 +26,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 else:
     start_date, end_date = today - timedelta(days=90), today
 
-start_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
-end_dt = datetime.combine(end_date, datetime.min.time(), tzinfo=timezone.utc) + timedelta(days=1)
+start_dt, end_dt = q.local_dates_to_utc(start_date, end_date)
 
 df = q.workouts_df(start_dt, end_dt, source_filter)
 

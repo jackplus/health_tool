@@ -1,4 +1,6 @@
 import io
+import hashlib
+import json
 import os
 from datetime import datetime, timezone
 from typing import IO
@@ -8,6 +10,7 @@ import psycopg2.extras
 import db
 from config import BATCH_SIZE, UPLOAD_DIR
 from parsers.apple_health import parse_apple_export
+from parsers.health_auto_export import parse_health_auto_export
 from parsers.common import NormalizedRecord, NormalizedWorkout
 from parsers.xiaomi import parse_xiaomi_export
 
@@ -48,6 +51,7 @@ def _workout_to_row(w: NormalizedWorkout) -> dict:
         "distance_unit": w.distance_unit,
         "energy_burned": w.energy_burned,
         "energy_unit": w.energy_unit,
+        "external_id": w.external_id,
         "raw": psycopg2.extras.Json(w.raw),
     }
 
@@ -132,4 +136,63 @@ def ingest_xiaomi(file_obj: IO[bytes], filename: str) -> dict:
         }
     except Exception as exc:
         db.record_upload_finish(upload_id, "failed", 0, 0, str(exc))
+        raise
+
+
+def ingest_health_auto_export(file_bytes: bytes) -> dict:
+    payload_hash = hashlib.sha256(file_bytes).hexdigest()
+    upload_id, already_seen, prior_status = db.record_api_ingestion_start(payload_hash)
+    if already_seen and prior_status == "success":
+        return {
+            "status": "duplicate_request",
+            "parsed": 0,
+            "inserted": 0,
+            "duplicates": 0,
+            "ignored": 0,
+        }
+
+    parsed_count = inserted = ignored = 0
+    try:
+        payload = json.loads(file_bytes)
+        if not isinstance(payload, dict):
+            raise ValueError("request body must be a JSON object")
+        result = parse_health_auto_export(payload)
+        metric_rows = [_record_to_row(item) for item in result.metrics]
+        workout_rows = [_workout_to_row(item) for item in result.workouts]
+        parsed_count = len(metric_rows) + len(workout_rows)
+
+        for i in range(0, len(metric_rows), BATCH_SIZE):
+            inserted += db.upsert_metrics(metric_rows[i : i + BATCH_SIZE], upload_id)
+        for i in range(0, len(workout_rows), BATCH_SIZE):
+            inserted += db.upsert_workouts(workout_rows[i : i + BATCH_SIZE], upload_id)
+
+        ignored = result.ignored
+        duplicates = parsed_count - inserted
+        notes = "; ".join(result.notes[:20]) or None
+        db.record_upload_finish(
+            upload_id,
+            "success",
+            parsed_count,
+            inserted,
+            notes,
+            records_duplicate=duplicates,
+            records_ignored=ignored,
+        )
+        return {
+            "status": "success",
+            "parsed": parsed_count,
+            "inserted": inserted,
+            "duplicates": duplicates,
+            "ignored": ignored,
+            "notes": result.notes,
+        }
+    except Exception as exc:
+        db.record_upload_finish(
+            upload_id,
+            "failed",
+            parsed_count,
+            inserted,
+            str(exc),
+            records_ignored=ignored,
+        )
         raise
